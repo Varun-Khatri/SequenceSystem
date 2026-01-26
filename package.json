@@ -1,0 +1,18 @@
+{
+    "name": "com.vk.sequencesystem",
+    "version": "1.0.0",
+    "displayName": "Sequence System",
+    "description": "Sequence System",
+    "unity": "2019.1",
+    "dependencies": {
+        
+    },
+    "keywords": [
+        "sequencesystem"
+    ],
+    "author": {
+        "name": "Varun Khatri",
+        "email": "varun.khatri18@gmail.com",
+        "url": ""
+    }
+}

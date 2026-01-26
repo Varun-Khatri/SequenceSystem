@@ -1,0 +1,16 @@
+{
+    "name": "VK.SequenceSystem.Core",
+    "rootNamespace": "VK.SequenceSystem.Core",
+    "references": [
+        "GUID:e9745f6a32442194c8dc5a43e9ab86f9"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

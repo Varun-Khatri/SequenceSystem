@@ -1,0 +1,62 @@
+using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using UnityEngine;
+
+namespace VK.SequenceSystem.Core
+{
+    // Keep your existing structs but fix the issues
+
+    public struct SequenceStep
+    {
+        public int EventId;
+        public int WaitForEventId;
+        public float DelaySeconds;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static SequenceStep Create(int eventId, int waitForId = -1, float delay = 0f)
+            => new SequenceStep { EventId = eventId, WaitForEventId = waitForId, DelaySeconds = delay };
+    }
+
+    public struct SequenceData
+    {
+        public int SequenceId;
+        public SequenceActionType[] ActionTypes;
+        public SequenceStep[] SingleSteps;
+        public ParallelStep[] ParallelSteps;
+        public float[] Delays;
+        public int[] WaitForEvents;
+
+        public bool IsValid => ActionTypes != null;
+
+        // OPTIMIZATION: Validate on creation
+        public void Validate()
+        {
+            if (ActionTypes == null) return;
+
+            int length = ActionTypes.Length;
+            if (SingleSteps.Length != length || ParallelSteps.Length != length ||
+                Delays.Length != length || WaitForEvents.Length != length)
+            {
+                throw new ArgumentException("All sequence arrays must have same length");
+            }
+        }
+    }
+
+    public struct ParallelStep
+    {
+        public int[] EventIds;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ParallelStep Create(params int[] eventIds)
+            => new ParallelStep { EventIds = eventIds ?? Array.Empty<int>() }; // Fix null
+    }
+
+    public enum SequenceActionType : byte
+    {
+        SingleEvent = 0,
+        ParallelEvents = 1,
+        WaitForEvent = 2,
+        Delay = 3
+    }
+}
