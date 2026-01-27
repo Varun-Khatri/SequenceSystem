@@ -10,6 +10,7 @@ namespace VK.SequenceSystem.Core
         private List<ParallelStep> _parallelSteps = new List<ParallelStep>(16);
         private List<float> _delays = new List<float>(16);
         private List<int> _waitForEvents = new List<int>(16);
+        private List<int> _waitForEventParams = new List<int>(16); // <-- ADD THIS: Parameters for wait events
 
         // Track which steps need which arrays
         private bool _hasParallelSteps = false;
@@ -18,32 +19,48 @@ namespace VK.SequenceSystem.Core
 
         public SequenceBuilder AddEvent(int eventId)
         {
-            return AddEvent(eventId, waitForEventId: -1, delayAfter: 0f);
+            return AddEvent(eventId, parameter: -1, waitForEventId: -1, delayAfter: 0f);
         }
 
-        public SequenceBuilder AddEvent(int eventId, int waitForEventId, float delayAfter = 0f)
+        public SequenceBuilder AddEvent(int eventId, int parameter)
+        {
+            return AddEvent(eventId, parameter: parameter, waitForEventId: -1, delayAfter: 0f);
+        }
+
+        public SequenceBuilder AddEvent(int eventId, int parameter, int waitForEventId, float delayAfter = 0f)
         {
             _actions.Add(SequenceActionType.SingleEvent);
-            _singleSteps.Add(SequenceStep.Create(eventId, waitForEventId, delayAfter));
+            _singleSteps.Add(SequenceStep.Create(eventId, waitForEventId, delayAfter, parameter));
             _parallelSteps.Add(default);
             _delays.Add(delayAfter);
             _waitForEvents.Add(waitForEventId);
+            _waitForEventParams.Add(-1); // Not a wait event
             _stepCount++;
             return this;
         }
 
         public SequenceBuilder AddParallelEvents(params int[] eventIds)
         {
-            return AddParallelEvents(eventIds, waitForEventId: -1, delayAfter: 0f);
+            return AddParallelEvents(eventIds, parameters: null, waitForEventId: -1, delayAfter: 0f);
         }
 
-        public SequenceBuilder AddParallelEvents(int[] eventIds, int waitForEventId, float delayAfter = 0f)
+        public SequenceBuilder AddParallelEvents(int[] eventIds, int[] parameters = null, int waitForEventId = -1,
+            float delayAfter = 0f)
         {
             _actions.Add(SequenceActionType.ParallelEvents);
             _singleSteps.Add(default);
-            _parallelSteps.Add(ParallelStep.Create(eventIds));
+
+            // Create ParallelStep with parameters if provided
+            var parallelStep = new ParallelStep
+            {
+                EventIds = eventIds,
+                Parameters = parameters ?? Array.Empty<int>()
+            };
+            _parallelSteps.Add(parallelStep);
+
             _delays.Add(delayAfter);
             _waitForEvents.Add(waitForEventId);
+            _waitForEventParams.Add(-1); // Not a wait event
             _hasParallelSteps = true;
             _hasNonSingleSteps = true;
             _stepCount++;
@@ -62,6 +79,7 @@ namespace VK.SequenceSystem.Core
             _parallelSteps.Add(default);
             _delays.Add(seconds);
             _waitForEvents.Add(waitForEventId);
+            _waitForEventParams.Add(-1); // Not a wait event
             _hasNonSingleSteps = true;
             _stepCount++;
             return this;
@@ -69,16 +87,22 @@ namespace VK.SequenceSystem.Core
 
         public SequenceBuilder WaitForEvent(int eventId)
         {
-            return WaitForEvent(eventId, delayAfter: 0f);
+            return WaitForEvent(eventId, expectedParameter: -1, delayAfter: 0f);
         }
 
-        public SequenceBuilder WaitForEvent(int eventId, float delayAfter)
+        public SequenceBuilder WaitForEvent(int eventId, int expectedParameter)
+        {
+            return WaitForEvent(eventId, expectedParameter: expectedParameter, delayAfter: 0f);
+        }
+
+        public SequenceBuilder WaitForEvent(int eventId, int expectedParameter, float delayAfter)
         {
             _actions.Add(SequenceActionType.WaitForEvent);
             _singleSteps.Add(default);
             _parallelSteps.Add(default);
             _delays.Add(delayAfter);
             _waitForEvents.Add(eventId);
+            _waitForEventParams.Add(expectedParameter); // <-- Store the expected parameter
             _hasNonSingleSteps = true;
             _stepCount++;
             return this;
@@ -97,7 +121,8 @@ namespace VK.SequenceSystem.Core
                     SingleSteps = Array.Empty<SequenceStep>(),
                     ParallelSteps = Array.Empty<ParallelStep>(),
                     Delays = Array.Empty<float>(),
-                    WaitForEvents = Array.Empty<int>()
+                    WaitForEvents = Array.Empty<int>(),
+                    WaitForEventParams = Array.Empty<int>() // <-- ADD THIS
                 };
             }
 
@@ -127,7 +152,8 @@ namespace VK.SequenceSystem.Core
                 SingleSteps = _singleSteps.ToArray(),
                 ParallelSteps = parallelSteps,
                 Delays = _delays.ToArray(),
-                WaitForEvents = _waitForEvents.ToArray()
+                WaitForEvents = _waitForEvents.ToArray(),
+                WaitForEventParams = _waitForEventParams.ToArray() // <-- ADD THIS
             };
 
             // Clear unused SingleSteps entries for non-single-event steps
@@ -153,6 +179,7 @@ namespace VK.SequenceSystem.Core
             _parallelSteps.Clear();
             _delays.Clear();
             _waitForEvents.Clear();
+            _waitForEventParams.Clear(); // <-- ADD THIS
             _hasParallelSteps = false;
             _hasNonSingleSteps = false;
             _stepCount = 0;
