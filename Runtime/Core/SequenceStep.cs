@@ -5,24 +5,49 @@ using UnityEngine;
 
 namespace VK.SequenceSystem.Core
 {
-    // Keep your existing structs but fix the issues
+    public struct EventData
+    {
+        public int EventId;
+        public object Data;
+
+        public EventData(int eventId, object data = null)
+        {
+            EventId = eventId;
+            Data = data;
+        }
+
+        public T GetData<T>()
+        {
+            return Data != null ? (T)Data : default;
+        }
+
+        public bool HasData => Data != null;
+    }
+
 
     public struct SequenceStep
     {
-        public int EventId;
+        public EventData EventData;
         public int WaitForEventId;
         public float DelaySeconds;
-        public int Parameter; // <-- ADD THIS: For passing additional data
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static SequenceStep Create(int eventId, int waitForId = -1, float delay = 0f, int parameter = -1)
-            => new SequenceStep
-            {
-                EventId = eventId,
-                WaitForEventId = waitForId,
-                DelaySeconds = delay,
-                Parameter = parameter
-            };
+        public static SequenceStep Create(EventData eventData, int waitForId = -1, float delay = 0f)
+            => new SequenceStep { EventData = eventData, WaitForEventId = waitForId, DelaySeconds = delay };
+        
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static SequenceStep Create(int eventId, object data = null, int waitForId = -1, float delay = 0f)
+            => new SequenceStep { EventData = new EventData(eventId, data), WaitForEventId = waitForId, DelaySeconds = delay };
+    }
+    
+    public struct WaitStep
+    {
+        public int WaitEventId;
+        public Func<EventData, bool> FilterCondition; // Optional filter for waiting on specific event data
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static WaitStep Create(int waitEventId, Func<EventData, bool> filterCondition = null)
+            => new WaitStep { WaitEventId = waitEventId, FilterCondition = filterCondition };
     }
 
     public struct SequenceData
@@ -31,9 +56,8 @@ namespace VK.SequenceSystem.Core
         public SequenceActionType[] ActionTypes;
         public SequenceStep[] SingleSteps;
         public ParallelStep[] ParallelSteps;
+        public WaitStep[] WaitSteps;
         public float[] Delays;
-        public int[] WaitForEvents;
-        public int[] WaitForEventParams; // <-- ADD THIS: Parameters for wait events
 
         public bool IsValid => ActionTypes != null;
 
@@ -44,8 +68,7 @@ namespace VK.SequenceSystem.Core
 
             int length = ActionTypes.Length;
             if (SingleSteps.Length != length || ParallelSteps.Length != length ||
-                Delays.Length != length || WaitForEvents.Length != length ||
-                WaitForEventParams.Length != length) // <-- ADD THIS
+                Delays.Length != length || WaitSteps.Length != length)
             {
                 throw new ArgumentException("All sequence arrays must have same length");
             }
@@ -54,24 +77,25 @@ namespace VK.SequenceSystem.Core
 
     public struct ParallelStep
     {
-        public int[] EventIds;
-        public int[] Parameters; // <-- ADD THIS: Parameters for each event
+        public EventData[] EventDataArray;
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ParallelStep Create(params EventData[] eventData)
+            => new ParallelStep { EventDataArray = eventData ?? Array.Empty<EventData>() };
+        
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ParallelStep Create(params int[] eventIds)
-            => new ParallelStep
+        {
+            if (eventIds == null || eventIds.Length == 0)
+                return new ParallelStep { EventDataArray = Array.Empty<EventData>() };
+            
+            var events = new EventData[eventIds.Length];
+            for (int i = 0; i < eventIds.Length; i++)
             {
-                EventIds = eventIds ?? Array.Empty<int>(),
-                Parameters = Array.Empty<int>() // Default empty
-            };
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static ParallelStep Create(int[] eventIds, int[] parameters)
-            => new ParallelStep
-            {
-                EventIds = eventIds ?? Array.Empty<int>(),
-                Parameters = parameters ?? Array.Empty<int>()
-            };
+                events[i] = new EventData(eventIds[i]);
+            }
+            return new ParallelStep { EventDataArray = events };
+        }
     }
 
     public enum SequenceActionType : byte
