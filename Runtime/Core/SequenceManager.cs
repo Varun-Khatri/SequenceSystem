@@ -36,17 +36,31 @@ namespace VK.SequenceSystem.Core
         // OPTIMIZATION: Cache for frequently accessed data
         private Dictionary<int, int> _sequenceToIndex = new Dictionary<int, int>(32);
 
+        // Event service
+        //private IEventService // _eventservice;
+
+        // Event subscriptions (only subscribe to events we're waiting for)
+        private Dictionary<int, Action<EventData>> _eventSubscriptions = new Dictionary<int, Action<EventData>>(32);
+
         void Awake()
         {
             // Initialize with capacity
             const int INITIAL_CAPACITY = 128;
             _sequences = new SequenceData[INITIAL_CAPACITY];
             _isRunning = new bool[INITIAL_CAPACITY];
+
+            // Get event service (assuming it's available in the scene)
+            // _eventservice = GetComponent<IEventService>() ?? FindObjectOfType<IEventService>();
+            //if ( _eventservice == null)
+            //{
+            //  Debug.LogError("SequenceManager requires an IEventService component in the scene!");
+            //}
         }
 
         void OnDestroy()
         {
             StopAllSequences();
+            UnsubscribeFromAllEvents();
         }
 
         // Public API
@@ -87,6 +101,12 @@ namespace VK.SequenceSystem.Core
             _sequenceToIndex[sequenceId] = _activeSequences.Count - 1;
             _isRunning[sequenceId] = true;
 
+            // Publish sequence started event
+            //if ( _eventservice != null)
+            // {
+            // _eventservice.Publish(new EventData(EventChannels.SEQUENCE_STARTED, sequenceId));
+            // }
+
             ExecuteCurrentStep(sequence);
         }
 
@@ -114,6 +134,12 @@ namespace VK.SequenceSystem.Core
 
                 _sequenceToIndex.Remove(sequenceId);
                 _isRunning[sequenceId] = false;
+
+                // Publish sequence stopped event
+                //if ( _eventservice != null)
+                //{
+                // _eventservice.Publish(new EventData(EventChannels.SEQUENCE_STOPPED, sequenceId));
+                //}
             }
             else
             {
@@ -139,6 +165,12 @@ namespace VK.SequenceSystem.Core
 
                         _sequenceToIndex.Remove(sequenceId);
                         _isRunning[sequenceId] = false;
+
+                        // Publish sequence stopped event
+                        //  if ( _eventservice != null)
+                        //   {
+                        // _eventservice.Publish(new EventData(EventChannels.SEQUENCE_STOPPED, sequenceId));
+                        //   }
                         break;
                     }
                 }
@@ -159,58 +191,9 @@ namespace VK.SequenceSystem.Core
             _eventToWaitingSequences.Clear();
             _sequenceToWaitingEvents.Clear();
             _sequenceToIndex.Clear();
-        }
 
-        // Event system integration - called when any event is published
-        public void OnEventPublished(int eventId)
-        {
-            // Check if any sequences are waiting for this event
-            if (_eventToWaitingSequences.TryGetValue(eventId, out var waitingSequences))
-            {
-                int count = waitingSequences.Count;
-
-                // OPTIMIZATION: Process with while loop to handle removals efficiently
-                int i = 0;
-                while (i < count)
-                {
-                    var seq = waitingSequences[i];
-
-                    // Validate this sequence is still waiting for this event
-                    if (!seq.IsWaiting || !IsSequenceWaitingForEvent(seq, eventId))
-                    {
-                        i++;
-                        continue;
-                    }
-
-                    RemoveSequenceFromWaiting(seq, eventId);
-                    seq.IsWaiting = false;
-
-                    // Check for delay after waiting
-                    var data = _sequences[seq.SequenceId];
-                    var delay = data.Delays[seq.CurrentStep];
-
-                    if (delay > 0)
-                    {
-                        ExecuteDelay(data, seq);
-                    }
-                    else
-                    {
-                        AdvanceToNextStep(seq);
-                    }
-
-                    // Swap-remove for O(1) removal
-                    waitingSequences[i] = waitingSequences[count - 1];
-                    waitingSequences.RemoveAt(count - 1);
-                    count--;
-                    // Don't increment i, check new element at position i
-                }
-
-                // Clean up empty lists
-                if (waitingSequences.Count == 0)
-                {
-                    _eventToWaitingSequences.Remove(eventId);
-                }
-            }
+            // Clean up all event subscriptions
+            UnsubscribeFromAllEvents();
         }
 
         // Core execution logic
@@ -249,10 +232,10 @@ namespace VK.SequenceSystem.Core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecuteSingleEvent(SequenceData data, ActiveSequence seq)
         {
-            int eventId = data.SingleSteps[seq.CurrentStep].EventId;
-            if (eventId != -1)
+            var eventStep = data.SingleSteps[seq.CurrentStep];
+            if (eventStep.EventData.EventId != -1) // &&  _eventservice != null)
             {
-                // _eventSystem.Publish(eventId);
+                // _eventservice.Publish(eventStep.EventData);
             }
 
             CheckPostExecution(data, seq);
@@ -262,18 +245,19 @@ namespace VK.SequenceSystem.Core
         private void ExecuteParallelEvents(SequenceData data, ActiveSequence seq)
         {
             var parallelStep = data.ParallelSteps[seq.CurrentStep];
-            if (parallelStep.EventIds != null && parallelStep.EventIds.Length > 0)
+            if (parallelStep.EventDataArray != null &&
+                parallelStep.EventDataArray.Length > 0) // &&  _eventservice != null)
             {
                 // OPTIMIZATION: Local variable for array bounds check elimination
-                var eventIds = parallelStep.EventIds;
-                int length = eventIds.Length;
+                var eventDataArray = parallelStep.EventDataArray;
+                int length = eventDataArray.Length;
 
                 for (int i = 0; i < length; i++)
                 {
-                    int eventId = eventIds[i];
-                    if (eventId != -1)
+                    var eventData = eventDataArray[i];
+                    if (eventData.EventId != -1)
                     {
-                        // _eventSystem.Publish(eventId);
+                        // _eventservice.Publish(eventData);
                     }
                 }
             }
@@ -283,19 +267,15 @@ namespace VK.SequenceSystem.Core
 
         private void ExecuteWaitForEvent(SequenceData data, ActiveSequence seq)
         {
-            int waitEventId = data.WaitForEvents[seq.CurrentStep];
+            var waitStep = data.WaitSteps[seq.CurrentStep];
+            int waitEventId = waitStep.WaitEventId;
+
             if (waitEventId != -1)
             {
                 seq.IsWaiting = true;
 
-                // Add to waiting list
-                if (!_eventToWaitingSequences.TryGetValue(waitEventId, out var list))
-                {
-                    list = new List<ActiveSequence>(4);
-                    _eventToWaitingSequences[waitEventId] = list;
-                }
-
-                list.Add(seq);
+                // Subscribe to this specific event
+                SubscribeToEvent(waitEventId, seq, waitStep.FilterCondition);
 
                 // Track reverse mapping
                 if (!_sequenceToWaitingEvents.TryGetValue(seq, out var events))
@@ -345,9 +325,9 @@ namespace VK.SequenceSystem.Core
 
                 // Check for wait event after delay
                 var data = _sequences[seq.SequenceId];
-                var waitId = data.WaitForEvents[seq.CurrentStep];
+                var waitStep = data.WaitSteps[seq.CurrentStep];
 
-                if (waitId != -1)
+                if (waitStep.WaitEventId != -1)
                 {
                     ExecuteWaitForEvent(data, seq);
                 }
@@ -361,8 +341,8 @@ namespace VK.SequenceSystem.Core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void CheckPostExecution(SequenceData data, ActiveSequence seq)
         {
-            int waitId = data.WaitForEvents[seq.CurrentStep];
-            if (waitId != -1)
+            var waitStep = data.WaitSteps[seq.CurrentStep];
+            if (waitStep.WaitEventId != -1)
             {
                 ExecuteWaitForEvent(data, seq);
                 return;
@@ -396,7 +376,10 @@ namespace VK.SequenceSystem.Core
         private void CompleteSequence(ActiveSequence seq)
         {
             // Publish sequence completed event
-            // _eventSystem.Publish(EventIds.SEQUENCE_COMPLETED, seq.SequenceId);
+            // if ( _eventservice != null)
+            //  {
+            // _eventservice.Publish(new EventData(EventChannels.SEQUENCE_COMPLETED, seq.SequenceId));
+            // }
 
             CleanupSequence(seq);
             ReturnToPool(seq);
@@ -430,34 +413,18 @@ namespace VK.SequenceSystem.Core
                 seq.DelayCoroutine = null;
             }
 
-            // Efficient cleanup using reverse mapping
+            // Unsubscribe from all events this sequence was waiting for
             if (_sequenceToWaitingEvents.TryGetValue(seq, out var waitingEvents))
             {
                 foreach (int eventId in waitingEvents)
                 {
                     if (_eventToWaitingSequences.TryGetValue(eventId, out var list))
                     {
-                        // OPTIMIZATION: Linear search but small lists
-                        for (int i = 0; i < list.Count; i++)
+                        list.Remove(seq);
+                        if (list.Count == 0)
                         {
-                            if (list[i] == seq)
-                            {
-                                // Swap-remove
-                                int lastIndex = list.Count - 1;
-                                if (i != lastIndex)
-                                {
-                                    list[i] = list[lastIndex];
-                                }
-
-                                list.RemoveAt(lastIndex);
-
-                                if (list.Count == 0)
-                                {
-                                    _eventToWaitingSequences.Remove(eventId);
-                                }
-
-                                break;
-                            }
+                            _eventToWaitingSequences.Remove(eventId);
+                            UnsubscribeFromEvent(eventId);
                         }
                     }
                 }
@@ -466,12 +433,85 @@ namespace VK.SequenceSystem.Core
             }
         }
 
-        // Helper methods
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool IsSequenceWaitingForEvent(ActiveSequence seq, int eventId)
+        // ============================================
+        // EVENT SUBSCRIPTION MANAGEMENT
+        // ============================================
+
+        private void SubscribeToEvent(int eventId, ActiveSequence seq, Func<EventData, bool> filterCondition = null)
         {
-            return _sequenceToWaitingEvents.TryGetValue(seq, out var events) &&
-                   events.Contains(eventId);
+            // if ( _eventservice == null) return;
+
+            // Add to waiting list
+            if (!_eventToWaitingSequences.TryGetValue(eventId, out var list))
+            {
+                list = new List<ActiveSequence>(4);
+                _eventToWaitingSequences[eventId] = list;
+
+                // First sequence waiting for this event - create subscription
+                Action<EventData> callback = (eventData) => OnEventPublished(eventId, eventData, filterCondition);
+                // _eventservice.Subscribe(eventId, callback);
+                _eventSubscriptions[eventId] = callback;
+            }
+
+            list.Add(seq);
+        }
+
+        private void OnEventPublished(int eventId, EventData eventData, Func<EventData, bool> filterCondition = null)
+        {
+            if (_eventToWaitingSequences.TryGetValue(eventId, out var waitingSequences))
+            {
+                // Process all sequences waiting for this event
+                int count = waitingSequences.Count;
+
+                int i = 0;
+                while (i < count)
+                {
+                    var seq = waitingSequences[i];
+
+                    // Validate this sequence is still waiting for this event
+                    if (!seq.IsWaiting || !IsSequenceWaitingForEvent(seq, eventId))
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    // Check filter condition if present
+                    if (filterCondition != null && !filterCondition(eventData))
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    RemoveSequenceFromWaiting(seq, eventId);
+                    seq.IsWaiting = false;
+
+                    // Check for delay after waiting
+                    var data = _sequences[seq.SequenceId];
+                    var delay = data.Delays[seq.CurrentStep];
+
+                    if (delay > 0)
+                    {
+                        ExecuteDelay(data, seq);
+                    }
+                    else
+                    {
+                        AdvanceToNextStep(seq);
+                    }
+
+                    // Swap-remove for O(1) removal
+                    waitingSequences[i] = waitingSequences[count - 1];
+                    waitingSequences.RemoveAt(count - 1);
+                    count--;
+                    // Don't increment i, check new element at position i
+                }
+
+                // Clean up empty lists
+                if (waitingSequences.Count == 0)
+                {
+                    _eventToWaitingSequences.Remove(eventId);
+                    UnsubscribeFromEvent(eventId);
+                }
+            }
         }
 
         private void RemoveSequenceFromWaiting(ActiveSequence seq, int eventId)
@@ -486,12 +526,49 @@ namespace VK.SequenceSystem.Core
             }
         }
 
+        private void UnsubscribeFromEvent(int eventId)
+        {
+            //if ( _eventservice != null && _eventSubscriptions.TryGetValue(eventId, out var callback))
+            //{
+            // _eventservice.Unsubscribe(eventId, callback);
+            //   _eventSubscriptions.Remove(eventId);
+            // }
+        }
+
+        private void UnsubscribeFromAllEvents()
+        {
+            //if ( _eventservice == null) return;
+
+            foreach (var kvp in _eventSubscriptions)
+            {
+                // _eventservice.Unsubscribe(kvp.Key, kvp.Value);
+            }
+
+            _eventSubscriptions.Clear();
+        }
+
+        // Helper methods
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsSequenceWaitingForEvent(ActiveSequence seq, int eventId)
+        {
+            return _sequenceToWaitingEvents.TryGetValue(seq, out var events) &&
+                   events.Contains(eventId);
+        }
+
         // Pool management
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ActiveSequence GetOrCreateActiveSequence()
         {
             if (_pool.Count > 0)
-                return _pool.Dequeue();
+            {
+                var seq = _pool.Dequeue();
+                seq.SequenceId = -1;
+                seq.CurrentStep = 0;
+                seq.IsWaiting = false;
+                seq.DelayCoroutine = null;
+                return seq;
+            }
+
             return new ActiveSequence();
         }
 
@@ -502,7 +579,14 @@ namespace VK.SequenceSystem.Core
             seq.SequenceId = -1;
             seq.CurrentStep = 0;
             seq.IsWaiting = false;
-            seq.DelayCoroutine = null;
+
+            // Ensure any delay coroutine is cleaned up
+            if (seq.DelayCoroutine != null)
+            {
+                StopCoroutine(seq.DelayCoroutine);
+                seq.DelayCoroutine = null;
+            }
+
             _pool.Enqueue(seq);
         }
 
@@ -517,8 +601,15 @@ namespace VK.SequenceSystem.Core
             Array.Resize(ref _isRunning, newSize);
         }
 
-        // OPTIMIZATION: Debug/utility methods
-#if UNITY_EDITOR
+        // ============================================
+        // PUBLIC UTILITY METHODS
+        // ============================================
+
+        public bool IsSequenceRunning(int sequenceId)
+        {
+            return sequenceId < _isRunning.Length && _isRunning[sequenceId];
+        }
+
         public int GetActiveSequenceCount() => _activeSequences.Count;
 
         public (int id, int step, bool waiting)[] GetActiveSequenceInfo()
@@ -531,6 +622,42 @@ namespace VK.SequenceSystem.Core
             }
 
             return info;
+        }
+
+        public int[] GetWaitingEventsForSequence(int sequenceId)
+        {
+            foreach (var seq in _activeSequences)
+            {
+                if (seq.SequenceId == sequenceId &&
+                    _sequenceToWaitingEvents.TryGetValue(seq, out var events))
+                {
+                    var result = new int[events.Count];
+                    int i = 0;
+                    foreach (var eventId in events)
+                    {
+                        result[i++] = eventId;
+                    }
+
+                    return result;
+                }
+            }
+
+            return Array.Empty<int>();
+        }
+
+        // ============================================
+        // DEBUG/EDITOR METHODS
+        // ============================================
+
+#if UNITY_EDITOR
+        public void OnGUI()
+        {
+            // Optional: Draw debug information in editor
+            GUILayout.Label($"Active Sequences: {_activeSequences.Count}");
+            foreach (var seq in _activeSequences)
+            {
+                GUILayout.Label($"  Sequence {seq.SequenceId}: Step {seq.CurrentStep}, Waiting: {seq.IsWaiting}");
+            }
         }
 #endif
     }
