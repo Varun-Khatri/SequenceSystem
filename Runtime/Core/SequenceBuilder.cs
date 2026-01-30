@@ -33,7 +33,7 @@ namespace VK.SequenceSystem.Core
             _actions.Add(SequenceActionType.SingleEvent);
             _singleSteps.Add(SequenceStep.Create(eventId, data, waitForId, delay));
             _parallelSteps.Add(default);
-            _waitSteps.Add(WaitStep.Create(waitForId));
+            _waitSteps.Add(waitForId >= 0 ? WaitStep.Create(waitForId) : WaitStep.Create(-1));
             _delays.Add(delay);
             _stepCount++;
             return this;
