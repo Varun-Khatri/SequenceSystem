@@ -10,6 +10,19 @@ namespace VK.SequenceSystem.Core
         private readonly List<WaitStep> _wait = new();
         private readonly List<float> _delays = new();
 
+        public SequenceBuilder ThenEvent(
+            int eventId,
+            int waitForId = -1,
+            float delay = 0f)
+        {
+            _actions.Add(SequenceActionType.SingleEvent);
+            _single.Add(SequenceStep.Create(eventId, waitForId, delay));
+            _parallel.Add(default);
+            _wait.Add(waitForId >= 0 ? WaitStep.Create<object>(waitForId) : default);
+            _delays.Add(delay);
+            return this;
+        }
+
         public SequenceBuilder ThenEvent<T>(
             int eventId,
             T data = default,

@@ -49,6 +49,19 @@ namespace VK.SequenceSystem.Core
                 Delay = delay
             };
         }
+
+        public static SequenceStep Create(
+            int eventId,
+            int waitForId,
+            float delay)
+        {
+            return new SequenceStep
+            {
+                EventData = new EventData<object>(eventId, null),
+                WaitForId = waitForId,
+                Delay = delay
+            };
+        }
     }
 
     public struct ParallelStep
