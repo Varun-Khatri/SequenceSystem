@@ -150,11 +150,11 @@ namespace VK.SequenceSystem.Core
             }
 
             // Optimize allocation based on actual usage
-            ParallelStep[] parallelSteps;
+            var parallelSteps = new ParallelStep[_stepCount];
+            var waitSteps = new WaitStep[_stepCount];
+
             if (_hasParallelSteps)
             {
-                parallelSteps = new ParallelStep[_stepCount];
-                // Copy only parallel steps
                 for (int i = 0; i < _stepCount; i++)
                 {
                     if (_actions[i] == SequenceActionType.ParallelEvents)
@@ -163,25 +163,15 @@ namespace VK.SequenceSystem.Core
                     }
                 }
             }
-            else
-            {
-                parallelSteps = Array.Empty<ParallelStep>();
-            }
 
-            WaitStep[] waitSteps;
             if (_hasWaitSteps)
             {
-                waitSteps = new WaitStep[_stepCount];
-                // Copy wait steps
                 for (int i = 0; i < _stepCount; i++)
                 {
                     waitSteps[i] = _waitSteps[i];
                 }
             }
-            else
-            {
-                waitSteps = Array.Empty<WaitStep>();
-            }
+
 
             var data = new SequenceData
             {

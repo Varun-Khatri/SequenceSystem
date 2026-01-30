@@ -34,20 +34,33 @@ namespace VK.SequenceSystem.Core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static SequenceStep Create(EventData eventData, int waitForId = -1, float delay = 0f)
             => new SequenceStep { EventData = eventData, WaitForEventId = waitForId, DelaySeconds = delay };
-        
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static SequenceStep Create(int eventId, object data = null, int waitForId = -1, float delay = 0f)
-            => new SequenceStep { EventData = new EventData(eventId, data), WaitForEventId = waitForId, DelaySeconds = delay };
+            => new SequenceStep
+                { EventData = new EventData(eventId, data), WaitForEventId = waitForId, DelaySeconds = delay };
     }
-    
+
     public struct WaitStep
     {
         public int WaitEventId;
-        public Func<EventData, bool> FilterCondition; // Optional filter for waiting on specific event data
+        public object ExpectedData;
+        public bool HasFilter; // true if ExpectedData should be checked
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static WaitStep Create(int waitEventId, Func<EventData, bool> filterCondition = null)
-            => new WaitStep { WaitEventId = waitEventId, FilterCondition = filterCondition };
+        public static WaitStep Create(int waitEventId, object expectedData = null)
+            => new WaitStep
+            {
+                WaitEventId = waitEventId,
+                ExpectedData = expectedData,
+                HasFilter = expectedData != null
+            };
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool Matches(EventData eventData)
+        {
+            return !HasFilter || object.Equals(eventData.Data, ExpectedData);
+        }
     }
 
     public struct SequenceData
@@ -82,18 +95,19 @@ namespace VK.SequenceSystem.Core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ParallelStep Create(params EventData[] eventData)
             => new ParallelStep { EventDataArray = eventData ?? Array.Empty<EventData>() };
-        
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ParallelStep Create(params int[] eventIds)
         {
             if (eventIds == null || eventIds.Length == 0)
                 return new ParallelStep { EventDataArray = Array.Empty<EventData>() };
-            
+
             var events = new EventData[eventIds.Length];
             for (int i = 0; i < eventIds.Length; i++)
             {
                 events[i] = new EventData(eventIds[i]);
             }
+
             return new ParallelStep { EventDataArray = events };
         }
     }

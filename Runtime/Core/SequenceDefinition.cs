@@ -131,24 +131,13 @@ namespace VK.SequenceSystem.Core
                 };
             }
 
-            // Count steps for optimized allocation
-            int parallelStepCount = 0;
-            int waitStepCount = 0;
-            for (int i = 0; i < stepCount; i++)
-            {
-                if (_steps[i].Type == SequenceActionType.ParallelEvents)
-                    parallelStepCount++;
-                if (_steps[i].Type == SequenceActionType.WaitForEvent)
-                    waitStepCount++;
-            }
-
             var data = new SequenceData
             {
                 SequenceId = SequenceId,
                 ActionTypes = new SequenceActionType[stepCount],
                 SingleSteps = new SequenceStep[stepCount],
-                ParallelSteps = parallelStepCount > 0 ? new ParallelStep[stepCount] : Array.Empty<ParallelStep>(),
-                WaitSteps = waitStepCount > 0 ? new WaitStep[stepCount] : Array.Empty<WaitStep>(),
+                ParallelSteps = new ParallelStep[stepCount],
+                WaitSteps = new WaitStep[stepCount],
                 Delays = new float[stepCount]
             };
 
@@ -156,11 +145,14 @@ namespace VK.SequenceSystem.Core
             {
                 var step = _steps[i];
 
-                // Apply validation fixes
+                // Validate defensively
                 if (!step.IsValid)
                 {
-                    Debug.LogWarning($"Invalid step {i} in sequence {SequenceId}, skipping");
-                    data.ActionTypes[i] = SequenceActionType.Delay; // Default to safe step
+                    Debug.LogWarning(
+                        $"Invalid step {i} in sequence {SequenceId}, replacing with safe Delay(0)"
+                    );
+
+                    data.ActionTypes[i] = SequenceActionType.Delay;
                     data.Delays[i] = 0f;
                     continue;
                 }
@@ -171,69 +163,68 @@ namespace VK.SequenceSystem.Core
                 switch (step.Type)
                 {
                     case SequenceActionType.SingleEvent:
-                        var eventData = step.GetParsedEventData();
+                    {
                         data.SingleSteps[i] = SequenceStep.Create(
                             step.EventId,
-                            eventData,
+                            step.GetParsedEventData(),
                             step.WaitForEventId,
                             step.DelaySeconds
                         );
                         break;
+                    }
 
                     case SequenceActionType.ParallelEvents:
-                        if (data.ParallelSteps.Length > 0)
+                    {
+                        var ids = step.ParallelEventIds;
+                        if (ids != null && ids.Length > 0)
                         {
-                            if (step.ParallelEventIds != null && step.ParallelEventIds.Length > 0)
-                            {
-                                var eventDataArray = new EventData[step.ParallelEventIds.Length];
-                                for (int j = 0; j < step.ParallelEventIds.Length; j++)
-                                {
-                                    object dataObj = null;
-                                    if (step.ParallelEventData != null && j < step.ParallelEventData.Length)
-                                    {
-                                        // Parse parallel event data
-                                        if (!string.IsNullOrEmpty(step.ParallelEventData[j]))
-                                        {
-                                            if (int.TryParse(step.ParallelEventData[j], out int intVal))
-                                                dataObj = intVal;
-                                            else if (float.TryParse(step.ParallelEventData[j], out float floatVal))
-                                                dataObj = floatVal;
-                                            else
-                                                dataObj = step.ParallelEventData[j];
-                                        }
-                                    }
+                            var eventDataArray = new EventData[ids.Length];
 
-                                    eventDataArray[j] = new EventData(step.ParallelEventIds[j], dataObj);
+                            for (int j = 0; j < ids.Length; j++)
+                            {
+                                object dataObj = null;
+
+                                if (step.ParallelEventData != null &&
+                                    j < step.ParallelEventData.Length &&
+                                    !string.IsNullOrEmpty(step.ParallelEventData[j]))
+                                {
+                                    var raw = step.ParallelEventData[j];
+
+                                    if (int.TryParse(raw, out int intVal))
+                                        dataObj = intVal;
+                                    else if (float.TryParse(raw, out float floatVal))
+                                        dataObj = floatVal;
+                                    else if (bool.TryParse(raw, out bool boolVal))
+                                        dataObj = boolVal;
+                                    else
+                                        dataObj = raw;
                                 }
 
-                                data.ParallelSteps[i] = ParallelStep.Create(eventDataArray);
+                                eventDataArray[j] = new EventData(ids[j], dataObj);
                             }
+
+                            data.ParallelSteps[i] = ParallelStep.Create(eventDataArray);
                         }
 
                         break;
+                    }
 
                     case SequenceActionType.WaitForEvent:
-                        if (data.WaitSteps.Length > 0)
-                        {
-                            var expectedData = step.GetParsedWaitEventData();
-                            Func<EventData, bool> filter = null;
-                            if (expectedData != null)
-                            {
-                                filter = (eventData) => object.Equals(eventData.Data, expectedData);
-                            }
-
-                            data.WaitSteps[i] = WaitStep.Create(step.WaitForEventId, filter);
-                        }
-
+                    {
+                        var expected = step.GetParsedWaitEventData();
+                        data.WaitSteps[i] = WaitStep.Create(step.WaitForEventId, expected);
                         break;
+                    }
 
                     case SequenceActionType.Delay:
-                        if (data.WaitSteps.Length > 0)
+                    {
+                        if (step.WaitForEventId != -1)
                         {
                             data.WaitSteps[i] = WaitStep.Create(step.WaitForEventId);
                         }
 
                         break;
+                    }
                 }
             }
 
