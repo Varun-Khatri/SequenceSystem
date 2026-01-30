@@ -85,30 +85,64 @@ namespace VK.SequenceSystem.Core
             => new ParallelStep { Events = events ?? Array.Empty<IEventData>() };
     }
 
+    public enum WaitMode : byte
+    {
+        EventOnly = 0, // Publish(eventId)
+        Typed = 1 // Publish<T>(eventId, data)
+    }
+
     public struct WaitStep
     {
         public int WaitEventId;
+        public WaitMode Mode;
+
+        // Typed mode
         public Type ExpectedType;
         public object ExpectedValue;
-        public bool HasFilter;
+        public bool HasValueFilter;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static WaitStep Create<T>(int eventId, T expectedValue = default)
+        public static WaitStep EventOnly(int eventId)
         {
             return new WaitStep
             {
                 WaitEventId = eventId,
+                Mode = WaitMode.EventOnly
+            };
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static WaitStep Typed<T>(int eventId, T expected = default)
+        {
+            bool hasValue =
+                !EqualityComparer<T>.Default.Equals(expected, default);
+
+            return new WaitStep
+            {
+                WaitEventId = eventId,
+                Mode = WaitMode.Typed,
                 ExpectedType = typeof(T),
-                ExpectedValue = expectedValue,
-                HasFilter = !EqualityComparer<T>.Default.Equals(expectedValue, default)
+                ExpectedValue = expected,
+                HasValueFilter = hasValue
             };
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool Matches(IEventData data)
         {
-            if (!HasFilter) return true;
-            if (data.DataType != ExpectedType) return false;
+            // Event-only wait → always matches, payload irrelevant
+            if (Mode == WaitMode.EventOnly)
+                return true;
+
+            if (data == null)
+                return false;
+
+            if (data.DataType != ExpectedType)
+                return false;
+
+            if (!HasValueFilter)
+                return true;
+
             return Equals(data.BoxedData, ExpectedValue);
         }
     }

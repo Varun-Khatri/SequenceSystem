@@ -1,18 +1,22 @@
 ﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
+using VK.SequenceSystem.Core;
 
 namespace VK.SequenceSystem.Core
 {
     [Serializable]
     public class SequenceStepData
     {
-        public SequenceActionType Type;
+        public SequenceActionType ActionType;
 
         public int EventId;
         public string EventData; // Serialized string
+
         public int WaitForEventId = -1;
-        public string WaitEventData; // Serialized string
+        public string WaitEventData; // Serialized string for typed wait
+        public string WaitForTypeName; // Optional type name for typed wait
+
         public float DelaySeconds;
 
         public int[] ParallelEventIds;
@@ -23,14 +27,14 @@ namespace VK.SequenceSystem.Core
             get
             {
                 if (DelaySeconds < 0) return false;
-                if (Type == SequenceActionType.ParallelEvents &&
+                if (ActionType == SequenceActionType.ParallelEvents &&
                     (ParallelEventIds == null || ParallelEventIds.Length == 0))
                     return false;
                 return true;
             }
         }
 
-        // ---------- Parsing ----------
+        // ---------------- Parsing ----------------
 
         public static bool TryParse(string raw, out IEventData data, int eventId)
         {
@@ -63,33 +67,32 @@ namespace VK.SequenceSystem.Core
             return true;
         }
 
-        public static bool TryParseWait(string raw, int eventId, out WaitStep step)
+        public static bool TryParseWait(string raw, int eventId, string typeName, out WaitStep step)
         {
-            if (string.IsNullOrEmpty(raw))
+            if (string.IsNullOrEmpty(typeName))
             {
-                step = WaitStep.Create<object>(eventId);
+                // Event-only wait
+                step = WaitStep.EventOnly(eventId);
                 return true;
             }
 
-            if (int.TryParse(raw, out var i))
-            {
-                step = WaitStep.Create(eventId, i);
-                return true;
-            }
+            // Use only the parameter, not any instance field
+            Type t = Type.GetType(typeName) ?? typeof(object);
+            object value = raw;
 
-            if (float.TryParse(raw, out var f))
-            {
-                step = WaitStep.Create(eventId, f);
-                return true;
-            }
+            if (t == typeof(int) && int.TryParse(raw, out var i)) value = i;
+            else if (t == typeof(float) && float.TryParse(raw, out var f)) value = f;
+            else if (t == typeof(bool) && bool.TryParse(raw, out var b)) value = b;
 
-            if (bool.TryParse(raw, out var b))
+            step = new WaitStep
             {
-                step = WaitStep.Create(eventId, b);
-                return true;
-            }
+                WaitEventId = eventId,
+                Mode = WaitMode.Typed,
+                ExpectedType = t,
+                ExpectedValue = value,
+                HasValueFilter = true
+            };
 
-            step = WaitStep.Create(eventId, raw);
             return true;
         }
     }
@@ -137,13 +140,12 @@ namespace VK.SequenceSystem.Core
                     continue;
                 }
 
-                data.ActionTypes[i] = s.Type;
+                data.ActionTypes[i] = s.ActionType;
                 data.Delays[i] = s.DelaySeconds;
 
-                switch (s.Type)
+                switch (s.ActionType)
                 {
                     case SequenceActionType.SingleEvent:
-                    {
                         SequenceStepData.TryParse(s.EventData, out var ev, s.EventId);
                         data.SingleSteps[i] = new SequenceStep
                         {
@@ -152,10 +154,8 @@ namespace VK.SequenceSystem.Core
                             Delay = s.DelaySeconds
                         };
                         break;
-                    }
 
                     case SequenceActionType.ParallelEvents:
-                    {
                         var list = new List<IEventData>();
                         for (int j = 0; j < s.ParallelEventIds.Length; j++)
                         {
@@ -163,31 +163,31 @@ namespace VK.SequenceSystem.Core
                                 ? s.ParallelEventData[j]
                                 : null;
 
-                            SequenceStepData.TryParse(raw, out var ev, s.ParallelEventIds[j]);
-                            list.Add(ev);
+                            SequenceStepData.TryParse(raw, out var ev2, s.ParallelEventIds[j]);
+                            list.Add(ev2);
                         }
 
                         data.ParallelSteps[i] = ParallelStep.Create(list.ToArray());
                         break;
-                    }
 
                     case SequenceActionType.WaitForEvent:
-                    {
                         SequenceStepData.TryParseWait(
                             s.WaitEventData,
                             s.WaitForEventId,
-                            out var wait);
+                            s.WaitForTypeName,
+                            out var wait
+                        );
 
                         data.WaitSteps[i] = wait;
                         break;
-                    }
 
                     case SequenceActionType.Delay:
-                    {
                         if (s.WaitForEventId >= 0)
-                            data.WaitSteps[i] = WaitStep.Create<object>(s.WaitForEventId);
+                        {
+                            data.WaitSteps[i] = WaitStep.EventOnly(s.WaitForEventId);
+                        }
+
                         break;
-                    }
                 }
             }
 

@@ -18,7 +18,11 @@ namespace VK.SequenceSystem.Core
             _actions.Add(SequenceActionType.SingleEvent);
             _single.Add(SequenceStep.Create(eventId, waitForId, delay));
             _parallel.Add(default);
-            _wait.Add(waitForId >= 0 ? WaitStep.Create<object>(waitForId) : default);
+
+            _wait.Add(waitForId >= 0
+                ? WaitStep.EventOnly(waitForId)
+                : default);
+
             _delays.Add(delay);
             return this;
         }
@@ -32,7 +36,11 @@ namespace VK.SequenceSystem.Core
             _actions.Add(SequenceActionType.SingleEvent);
             _single.Add(SequenceStep.Create(eventId, data, waitForId, delay));
             _parallel.Add(default);
-            _wait.Add(waitForId >= 0 ? WaitStep.Create<object>(waitForId) : default);
+
+            _wait.Add(waitForId >= 0
+                ? WaitStep.EventOnly(waitForId)
+                : default);
+
             _delays.Add(delay);
             return this;
         }
@@ -52,7 +60,7 @@ namespace VK.SequenceSystem.Core
             _actions.Add(SequenceActionType.WaitForEvent);
             _single.Add(default);
             _parallel.Add(default);
-            _wait.Add(WaitStep.Create(eventId, expected));
+            _wait.Add(WaitStep.Typed(eventId, expected));
             _delays.Add(0);
             return this;
         }
