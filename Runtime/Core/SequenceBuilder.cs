@@ -39,6 +39,11 @@ namespace VK.SequenceSystem.Core
             return this;
         }
 
+        public SequenceBuilder ThenEvent(int eventId, int waitForId = -1, float delay = 0f)
+        {
+            return ThenEvent<object>(eventId, null, waitForId, delay);
+        }
+
         /// <summary>
         /// Add multiple events to run in parallel (no payload).
         /// </summary>
