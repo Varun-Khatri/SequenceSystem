@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using UnityEngine;
+using VK.Events;
 
 namespace VK.SequenceSystem.Core
 {
@@ -10,6 +11,9 @@ namespace VK.SequenceSystem.Core
         int EventId { get; }
         Type DataType { get; }
         object BoxedData { get; }
+
+        // NEW — allows strongly-typed publish without boxing
+        void Publish(IEventService eventService);
     }
 
     public readonly struct EventData<T> : IEventData
@@ -24,6 +28,15 @@ namespace VK.SequenceSystem.Core
         {
             EventId = eventId;
             Data = data;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void Publish(IEventService eventService)
+        {
+            if (Data == null)
+                eventService.Publish(EventId);
+            else
+                eventService.Publish(EventId, Data);
         }
 
         public override string ToString()
