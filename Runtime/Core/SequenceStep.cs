@@ -13,7 +13,8 @@ namespace VK.SequenceSystem.Core
         public EventData(int eventId, object data = null)
         {
             EventId = eventId;
-            Data = data;
+            Data = data;     Debug.Log($"[EventData] Created: EventId={eventId}, Data={(data != null ? data.ToString() : "null")}");
+
         }
 
         public T GetData<T>()
@@ -37,8 +38,16 @@ namespace VK.SequenceSystem.Core
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static SequenceStep Create(int eventId, object data = null, int waitForId = -1, float delay = 0f)
-            => new SequenceStep
-                { EventData = new EventData(eventId, data), WaitForEventId = waitForId, DelaySeconds = delay };
+        {
+            Debug.Log(
+                $"[SequenceStep] Creating: eventId={eventId}, data={(data != null ? data.ToString() : "null")}, waitForId={waitForId}, delay={delay}");
+
+
+            return new SequenceStep
+            {
+                EventData = new EventData(eventId, data), WaitForEventId = waitForId, DelaySeconds = delay
+            };
+        }
     }
 
     public struct WaitStep

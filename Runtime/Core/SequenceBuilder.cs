@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace VK.SequenceSystem.Core
 {
@@ -25,6 +26,9 @@ namespace VK.SequenceSystem.Core
 
         public SequenceBuilder ThenEvent<T>(int eventId, T data = default, int waitForId = -1, float delay = 0f)
         {
+            Debug.Log(
+                $"[Builder] Adding ThenEvent: eventId={eventId}, data={(data != null ? data.ToString() : "null")}, waitForId={waitForId}, delay={delay}");
+
             _actions.Add(SequenceActionType.SingleEvent);
             _singleSteps.Add(SequenceStep.Create(eventId, data, waitForId, delay));
             _parallelSteps.Add(default);
