@@ -4,19 +4,20 @@ using UnityEngine;
 
 namespace VK.SequenceSystem.Core
 {
-    [System.Serializable]
+    [Serializable]
     public class SequenceStepData
     {
         public SequenceActionType Type;
-        public int EventId;
-        public string EventData; // Serialized as string for ScriptableObject
-        public int WaitForEventId = -1;
-        public string WaitEventData; // Expected data for wait events
-        public float DelaySeconds;
-        public int[] ParallelEventIds;
-        public string[] ParallelEventData; // Data for parallel events
 
-        // Helper properties for validation
+        public int EventId;
+        public string EventData; // Serialized string
+        public int WaitForEventId = -1;
+        public string WaitEventData; // Serialized string
+        public float DelaySeconds;
+
+        public int[] ParallelEventIds;
+        public string[] ParallelEventData;
+
         public bool IsValid
         {
             get
@@ -29,68 +30,68 @@ namespace VK.SequenceSystem.Core
             }
         }
 
-        // Helper method to parse data
-        public object GetParsedEventData()
+        // ---------- Parsing ----------
+
+        public static bool TryParse(string raw, out IEventData data, int eventId)
         {
-            return ParseData(EventData);
+            data = null;
+            if (string.IsNullOrEmpty(raw))
+            {
+                data = new EventData<object>(eventId, null);
+                return true;
+            }
+
+            if (int.TryParse(raw, out var i))
+            {
+                data = new EventData<int>(eventId, i);
+                return true;
+            }
+
+            if (float.TryParse(raw, out var f))
+            {
+                data = new EventData<float>(eventId, f);
+                return true;
+            }
+
+            if (bool.TryParse(raw, out var b))
+            {
+                data = new EventData<bool>(eventId, b);
+                return true;
+            }
+
+            data = new EventData<string>(eventId, raw);
+            return true;
         }
 
-        public object GetParsedWaitEventData()
+        public static bool TryParseWait(string raw, int eventId, out WaitStep step)
         {
-            return ParseData(WaitEventData);
+            if (string.IsNullOrEmpty(raw))
+            {
+                step = WaitStep.Create<object>(eventId);
+                return true;
+            }
+
+            if (int.TryParse(raw, out var i))
+            {
+                step = WaitStep.Create(eventId, i);
+                return true;
+            }
+
+            if (float.TryParse(raw, out var f))
+            {
+                step = WaitStep.Create(eventId, f);
+                return true;
+            }
+
+            if (bool.TryParse(raw, out var b))
+            {
+                step = WaitStep.Create(eventId, b);
+                return true;
+            }
+
+            step = WaitStep.Create(eventId, raw);
+            return true;
         }
-
-        private object ParseData(string data)
-        {
-            if (string.IsNullOrEmpty(data)) return null;
-
-            // Simple parsing logic - you might want to extend this
-            if (int.TryParse(data, out int intValue)) return intValue;
-            if (float.TryParse(data, out float floatValue)) return floatValue;
-            if (bool.TryParse(data, out bool boolValue)) return boolValue;
-
-            return data; // Return as string
-        }
-
-        // Factory methods
-        public static SequenceStepData
-            CreateEvent(int eventId, object data = null, int waitFor = -1, float delay = 0f) =>
-            new SequenceStepData
-            {
-                Type = SequenceActionType.SingleEvent,
-                EventId = eventId,
-                EventData = data?.ToString(),
-                WaitForEventId = waitFor,
-                DelaySeconds = delay
-            };
-
-        public static SequenceStepData CreateParallel(int[] eventIds, string[] eventData = null, int waitFor = -1,
-            float delay = 0f) =>
-            new SequenceStepData
-            {
-                Type = SequenceActionType.ParallelEvents,
-                ParallelEventIds = eventIds,
-                ParallelEventData = eventData,
-                WaitForEventId = waitFor,
-                DelaySeconds = delay
-            };
-
-        public static SequenceStepData CreateWait(int eventId, object expectedData = null, float delay = 0f) =>
-            new SequenceStepData
-            {
-                Type = SequenceActionType.WaitForEvent,
-                WaitForEventId = eventId,
-                WaitEventData = expectedData?.ToString(),
-                DelaySeconds = delay
-            };
-
-        public static SequenceStepData CreateDelay(float seconds, int waitFor = -1) =>
-            new SequenceStepData
-            {
-                Type = SequenceActionType.Delay,
-                DelaySeconds = seconds,
-                WaitForEventId = waitFor
-            };
     }
 
     [CreateAssetMenu(menuName = "Systems/Sequence Definition")]
@@ -98,131 +99,93 @@ namespace VK.SequenceSystem.Core
     {
         public int SequenceId;
 
-        [SerializeField] private List<SequenceStepData> _steps = new List<SequenceStepData>();
+        [SerializeField] private List<SequenceStepData> _steps = new();
 
-        // Cache the runtime data to avoid re-converting
-        private SequenceData? _cachedRuntimeData;
-
-        public IReadOnlyList<SequenceStepData> Steps => _steps;
+        private SequenceData? _cachedRuntime;
 
         public SequenceData GetRuntimeData()
         {
-            if (_cachedRuntimeData.HasValue)
-                return _cachedRuntimeData.Value;
+            if (_cachedRuntime.HasValue)
+                return _cachedRuntime.Value;
 
-            _cachedRuntimeData = ConvertToRuntimeData();
-            return _cachedRuntimeData.Value;
+            _cachedRuntime = BuildRuntime();
+            return _cachedRuntime.Value;
         }
 
-        private SequenceData ConvertToRuntimeData()
+        private SequenceData BuildRuntime()
         {
-            int stepCount = _steps.Count;
-
-            if (stepCount == 0)
-            {
-                return new SequenceData
-                {
-                    SequenceId = SequenceId,
-                    ActionTypes = Array.Empty<SequenceActionType>(),
-                    SingleSteps = Array.Empty<SequenceStep>(),
-                    ParallelSteps = Array.Empty<ParallelStep>(),
-                    WaitSteps = Array.Empty<WaitStep>(),
-                    Delays = Array.Empty<float>()
-                };
-            }
+            int count = _steps.Count;
 
             var data = new SequenceData
             {
                 SequenceId = SequenceId,
-                ActionTypes = new SequenceActionType[stepCount],
-                SingleSteps = new SequenceStep[stepCount],
-                ParallelSteps = new ParallelStep[stepCount],
-                WaitSteps = new WaitStep[stepCount],
-                Delays = new float[stepCount]
+                ActionTypes = new SequenceActionType[count],
+                SingleSteps = new SequenceStep[count],
+                ParallelSteps = new ParallelStep[count],
+                WaitSteps = new WaitStep[count],
+                Delays = new float[count]
             };
 
-            for (int i = 0; i < stepCount; i++)
+            for (int i = 0; i < count; i++)
             {
-                var step = _steps[i];
+                var s = _steps[i];
 
-                // Validate defensively
-                if (!step.IsValid)
+                if (!s.IsValid)
                 {
-                    Debug.LogWarning(
-                        $"Invalid step {i} in sequence {SequenceId}, replacing with safe Delay(0)"
-                    );
-
                     data.ActionTypes[i] = SequenceActionType.Delay;
-                    data.Delays[i] = 0f;
+                    data.Delays[i] = 0;
                     continue;
                 }
 
-                data.ActionTypes[i] = step.Type;
-                data.Delays[i] = step.DelaySeconds;
+                data.ActionTypes[i] = s.Type;
+                data.Delays[i] = s.DelaySeconds;
 
-                switch (step.Type)
+                switch (s.Type)
                 {
                     case SequenceActionType.SingleEvent:
                     {
-                        data.SingleSteps[i] = SequenceStep.Create(
-                            step.EventId,
-                            step.GetParsedEventData(),
-                            step.WaitForEventId,
-                            step.DelaySeconds
-                        );
+                        SequenceStepData.TryParse(s.EventData, out var ev, s.EventId);
+                        data.SingleSteps[i] = new SequenceStep
+                        {
+                            EventData = ev,
+                            WaitForId = s.WaitForEventId,
+                            Delay = s.DelaySeconds
+                        };
                         break;
                     }
 
                     case SequenceActionType.ParallelEvents:
                     {
-                        var ids = step.ParallelEventIds;
-                        if (ids != null && ids.Length > 0)
+                        var list = new List<IEventData>();
+                        for (int j = 0; j < s.ParallelEventIds.Length; j++)
                         {
-                            var eventDataArray = new EventData[ids.Length];
+                            string raw = (s.ParallelEventData != null && j < s.ParallelEventData.Length)
+                                ? s.ParallelEventData[j]
+                                : null;
 
-                            for (int j = 0; j < ids.Length; j++)
-                            {
-                                object dataObj = null;
-
-                                if (step.ParallelEventData != null &&
-                                    j < step.ParallelEventData.Length &&
-                                    !string.IsNullOrEmpty(step.ParallelEventData[j]))
-                                {
-                                    var raw = step.ParallelEventData[j];
-
-                                    if (int.TryParse(raw, out int intVal))
-                                        dataObj = intVal;
-                                    else if (float.TryParse(raw, out float floatVal))
-                                        dataObj = floatVal;
-                                    else if (bool.TryParse(raw, out bool boolVal))
-                                        dataObj = boolVal;
-                                    else
-                                        dataObj = raw;
-                                }
-
-                                eventDataArray[j] = new EventData(ids[j], dataObj);
-                            }
-
-                            data.ParallelSteps[i] = ParallelStep.Create(eventDataArray);
+                            SequenceStepData.TryParse(raw, out var ev, s.ParallelEventIds[j]);
+                            list.Add(ev);
                         }
 
+                        data.ParallelSteps[i] = ParallelStep.Create(list.ToArray());
                         break;
                     }
 
                     case SequenceActionType.WaitForEvent:
                     {
-                        var expected = step.GetParsedWaitEventData();
-                        data.WaitSteps[i] = WaitStep.Create(step.WaitForEventId, expected);
+                        SequenceStepData.TryParseWait(
+                            s.WaitEventData,
+                            s.WaitForEventId,
+                            out var wait);
+
+                        data.WaitSteps[i] = wait;
                         break;
                     }
 
                     case SequenceActionType.Delay:
                     {
-                        if (step.WaitForEventId != -1)
-                        {
-                            data.WaitSteps[i] = WaitStep.Create(step.WaitForEventId);
-                        }
-
+                        if (s.WaitForEventId >= 0)
+                            data.WaitSteps[i] = WaitStep.Create<object>(s.WaitForEventId);
                         break;
                     }
                 }
@@ -232,60 +195,10 @@ namespace VK.SequenceSystem.Core
             return data;
         }
 
-        // Editor methods
 #if UNITY_EDITOR
-        public void AddStep(SequenceStepData step)
-        {
-            _steps.Add(step);
-            _cachedRuntimeData = null;
-        }
-
-        public void RemoveStep(int index)
-        {
-            if (index >= 0 && index < _steps.Count)
-            {
-                _steps.RemoveAt(index);
-                _cachedRuntimeData = null;
-            }
-        }
-
-        public void MoveStep(int fromIndex, int toIndex)
-        {
-            if (fromIndex >= 0 && fromIndex < _steps.Count &&
-                toIndex >= 0 && toIndex < _steps.Count)
-            {
-                var step = _steps[fromIndex];
-                _steps.RemoveAt(fromIndex);
-                _steps.Insert(toIndex, step);
-                _cachedRuntimeData = null;
-            }
-        }
-
         private void OnValidate()
         {
-            _cachedRuntimeData = null;
-
-            // Validate all steps in editor
-            for (int i = 0; i < _steps.Count; i++)
-            {
-                var step = _steps[i];
-                if (step.DelaySeconds < 0)
-                    step.DelaySeconds = 0;
-
-                if (step.Type == SequenceActionType.ParallelEvents)
-                {
-                    if (step.ParallelEventIds == null)
-                        step.ParallelEventIds = Array.Empty<int>();
-                    else if (step.ParallelEventIds.Length == 0)
-                        Debug.LogWarning($"ParallelEvents step {i} in sequence {SequenceId} has no events");
-
-                    if (step.ParallelEventData == null)
-                        step.ParallelEventData = Array.Empty<string>();
-                }
-
-                if (step.Type == SequenceActionType.SingleEvent && step.EventId == -1)
-                    Debug.LogWarning($"SingleEvent step {i} in sequence {SequenceId} has EventId -1 (no event)");
-            }
+            _cachedRuntime = null;
         }
 #endif
     }

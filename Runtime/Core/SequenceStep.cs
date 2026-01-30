@@ -5,83 +5,92 @@ using UnityEngine;
 
 namespace VK.SequenceSystem.Core
 {
-    public struct EventData
+    public interface IEventData
     {
-        public int EventId;
-        public object Data;
+        int EventId { get; }
+        Type DataType { get; }
+        object BoxedData { get; }
+    }
 
-        public EventData(int eventId, object data = null)
+    public readonly struct EventData<T> : IEventData
+    {
+        public int EventId { get; }
+        public T Data { get; }
+
+        public Type DataType => typeof(T);
+        public object BoxedData => Data;
+
+        public EventData(int eventId, T data = default)
         {
             EventId = eventId;
             Data = data;
         }
 
-        public T GetData<T>() => Data != null ? (T)Data : default;
-
-        public bool HasData => Data != null;
+        public override string ToString()
+            => $"EventData<{typeof(T).Name}>({EventId}, {Data})";
     }
 
     public struct SequenceStep
     {
-        public EventData EventData;
-        public int WaitForEventId;
-        public float DelaySeconds;
+        public IEventData EventData;
+        public int WaitForId;
+        public float Delay;
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static SequenceStep Create(EventData eventData, int waitForId = -1, float delay = 0f)
-            => new SequenceStep { EventData = eventData, WaitForEventId = waitForId, DelaySeconds = delay };
+        public static SequenceStep Create<T>(
+            int eventId,
+            T data,
+            int waitForId,
+            float delay)
+        {
+            return new SequenceStep
+            {
+                EventData = new EventData<T>(eventId, data),
+                WaitForId = waitForId,
+                Delay = delay
+            };
+        }
+    }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static SequenceStep Create(int eventId, object data = null, int waitForId = -1, float delay = 0f)
-            => new SequenceStep
-                { EventData = new EventData(eventId, data), WaitForEventId = waitForId, DelaySeconds = delay };
+    public struct ParallelStep
+    {
+        public IEventData[] Events;
+
+        public static ParallelStep Create(IEventData[] events)
+            => new ParallelStep { Events = events ?? Array.Empty<IEventData>() };
     }
 
     public struct WaitStep
     {
         public int WaitEventId;
-        public object ExpectedData;
+        public Type ExpectedType;
+        public object ExpectedValue;
         public bool HasFilter;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static WaitStep Create(int waitEventId, object expectedData = null)
-            => new WaitStep
-            {
-                WaitEventId = waitEventId,
-                ExpectedData = expectedData,
-                HasFilter = expectedData != null
-            };
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool Matches(EventData eventData)
-            => !HasFilter || object.Equals(eventData.Data, ExpectedData);
-    }
-
-    public struct ParallelStep
-    {
-        public EventData[] EventDataArray;
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static ParallelStep Create(params EventData[] eventData)
-            => new ParallelStep { EventDataArray = eventData ?? Array.Empty<EventData>() };
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static ParallelStep Create(params int[] eventIds)
+        public static WaitStep Create<T>(int eventId, T expectedValue = default)
         {
-            if (eventIds == null || eventIds.Length == 0)
-                return new ParallelStep { EventDataArray = Array.Empty<EventData>() };
+            return new WaitStep
+            {
+                WaitEventId = eventId,
+                ExpectedType = typeof(T),
+                ExpectedValue = expectedValue,
+                HasFilter = !EqualityComparer<T>.Default.Equals(expectedValue, default)
+            };
+        }
 
-            var events = new EventData[eventIds.Length];
-            for (int i = 0; i < eventIds.Length; i++)
-                events[i] = new EventData(eventIds[i]);
-
-            return new ParallelStep { EventDataArray = events };
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool Matches(IEventData data)
+        {
+            if (!HasFilter) return true;
+            if (data.DataType != ExpectedType) return false;
+            return Equals(data.BoxedData, ExpectedValue);
         }
     }
 
     public struct SequenceData
     {
         public int SequenceId;
+
         public SequenceActionType[] ActionTypes;
         public SequenceStep[] SingleSteps;
         public ParallelStep[] ParallelSteps;
@@ -92,13 +101,13 @@ namespace VK.SequenceSystem.Core
 
         public void Validate()
         {
-            if (ActionTypes == null) return;
-
-            int length = ActionTypes.Length;
-            if (SingleSteps.Length != length || ParallelSteps.Length != length ||
-                Delays.Length != length || WaitSteps.Length != length)
+            int len = ActionTypes.Length;
+            if (SingleSteps.Length != len ||
+                ParallelSteps.Length != len ||
+                WaitSteps.Length != len ||
+                Delays.Length != len)
             {
-                throw new ArgumentException("All sequence arrays must have same length");
+                throw new ArgumentException("Sequence arrays must all have the same length");
             }
         }
     }

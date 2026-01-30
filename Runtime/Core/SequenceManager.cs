@@ -1,439 +1,180 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using UnityEngine;
+
+//using VK.Events;
 
 namespace VK.SequenceSystem.Core
 {
-    public class SequenceManager : MonoBehaviour
+    public sealed class SequenceManager : MonoBehaviour
     {
+        [SerializeField] private MonoBehaviour _eventServiceSource;
+        // private IEventService _events;
+
         private SequenceData[] _sequences;
         private bool[] _isRunning;
 
-        private HashSet<ActiveSequence> _activeSequenceSet = new HashSet<ActiveSequence>();
-        private List<ActiveSequence> _activeSequences = new List<ActiveSequence>(16);
-        private readonly Queue<ActiveSequence> _pool = new Queue<ActiveSequence>();
+        private readonly List<ActiveSequence> _active = new();
+        private readonly Queue<ActiveSequence> _pool = new();
 
-        private Dictionary<int, List<ActiveSequence>> _eventToWaitingSequences =
-            new Dictionary<int, List<ActiveSequence>>(32);
+        private readonly Dictionary<int, List<ActiveSequence>> _waiting = new();
+        private readonly Dictionary<int, Action<IEventData>> _subscriptions = new();
 
-        private Dictionary<ActiveSequence, List<int>> _sequenceToWaitingEvents =
-            new Dictionary<ActiveSequence, List<int>>(32);
-
-        private Dictionary<int, int> _sequenceToIndex = new Dictionary<int, int>(32);
-        private Dictionary<int, Action<EventData>> _eventSubscriptions = new Dictionary<int, Action<EventData>>(32);
-
-        private class ActiveSequence
+        private sealed class ActiveSequence
         {
-            public int SequenceId;
-            public int CurrentStep;
-            public bool IsWaiting;
-            public Coroutine DelayCoroutine;
+            public int Id;
+            public int Step;
+            public bool Waiting;
+            public Coroutine Delay;
         }
 
         void Awake()
         {
-            const int INITIAL_CAPACITY = 128;
-            _sequences = new SequenceData[INITIAL_CAPACITY];
-            _isRunning = new bool[INITIAL_CAPACITY];
+            //_events = (IEventService)_eventServiceSource;
+            _sequences = new SequenceData[128];
+            _isRunning = new bool[128];
         }
 
-        void OnDestroy()
+        public void Register(int id, SequenceData data)
         {
-            StopAllSequences();
-            UnsubscribeFromAllEvents();
+            EnsureCapacity(id);
+            data.Validate();
+            _sequences[id] = data;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void RegisterSequence(int sequenceId, SequenceData data)
+        public void StartSequence(int id)
         {
-            EnsureCapacity(sequenceId);
-
-            if (data.IsValid)
-            {
-                data.Validate();
-                _sequences[sequenceId] = data;
-            }
-            else
-            {
-                Debug.LogError($"Invalid sequence data for ID: {sequenceId}");
-            }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void StartSequence(int sequenceId)
-        {
-            if (sequenceId >= _sequences.Length || !_sequences[sequenceId].IsValid || _isRunning[sequenceId])
+            if (id >= _sequences.Length || !_sequences[id].IsValid || _isRunning[id])
                 return;
 
-            var seq = GetOrCreateActiveSequence();
-            seq.SequenceId = sequenceId;
-            seq.CurrentStep = 0;
-            seq.IsWaiting = false;
-            seq.DelayCoroutine = null;
+            var seq = Get();
+            seq.Id = id;
+            seq.Step = 0;
+            seq.Waiting = false;
 
-            _activeSequences.Add(seq);
-            _activeSequenceSet.Add(seq);
-            _sequenceToIndex[sequenceId] = _activeSequences.Count - 1;
-            _isRunning[sequenceId] = true;
-
-            ExecuteCurrentStep(seq);
+            _active.Add(seq);
+            _isRunning[id] = true;
+            Execute(seq);
         }
 
-        public void StopSequence(int sequenceId)
+        private void Execute(ActiveSequence seq)
         {
-            if (_sequenceToIndex.TryGetValue(sequenceId, out int index) &&
-                index < _activeSequences.Count &&
-                _activeSequences[index].SequenceId == sequenceId)
+            var data = _sequences[seq.Id];
+            if (seq.Step >= data.ActionTypes.Length)
             {
-                var seq = _activeSequences[index];
-                CleanupSequence(seq);
-                ReturnToPool(seq);
-                _activeSequenceSet.Remove(seq);
-
-                int lastIndex = _activeSequences.Count - 1;
-                if (index != lastIndex)
-                {
-                    _activeSequences[index] = _activeSequences[lastIndex];
-                    _sequenceToIndex[_activeSequences[index].SequenceId] = index;
-                }
-
-                _activeSequences.RemoveAt(lastIndex);
-                _sequenceToIndex.Remove(sequenceId);
-                _isRunning[sequenceId] = false;
-            }
-            else
-            {
-                // fallback linear search
-                for (int i = 0; i < _activeSequences.Count; i++)
-                {
-                    if (_activeSequences[i].SequenceId == sequenceId)
-                    {
-                        var seq = _activeSequences[i];
-                        CleanupSequence(seq);
-                        ReturnToPool(seq);
-                        _activeSequenceSet.Remove(seq);
-
-                        int lastIndex = _activeSequences.Count - 1;
-                        if (i != lastIndex)
-                        {
-                            _activeSequences[i] = _activeSequences[lastIndex];
-                            _sequenceToIndex[_activeSequences[i].SequenceId] = i;
-                        }
-
-                        _activeSequences.RemoveAt(lastIndex);
-                        _sequenceToIndex.Remove(sequenceId);
-                        _isRunning[sequenceId] = false;
-                        break;
-                    }
-                }
-            }
-        }
-
-        public void StopAllSequences()
-        {
-            foreach (var seq in _activeSequences)
-            {
-                CleanupSequence(seq);
-                ReturnToPool(seq);
-            }
-
-            _activeSequences.Clear();
-            _activeSequenceSet.Clear();
-            Array.Clear(_isRunning, 0, _isRunning.Length);
-            _eventToWaitingSequences.Clear();
-            _sequenceToWaitingEvents.Clear();
-            _sequenceToIndex.Clear();
-            UnsubscribeFromAllEvents();
-        }
-
-        private void ExecuteCurrentStep(ActiveSequence seq)
-        {
-            var data = _sequences[seq.SequenceId];
-            if (seq.CurrentStep >= data.ActionTypes.Length)
-            {
-                CompleteSequence(seq);
+                Complete(seq);
                 return;
             }
 
-            var actionType = data.ActionTypes[seq.CurrentStep];
-            if (actionType == SequenceActionType.SingleEvent)
-                ExecuteSingleEvent(data, seq);
-            else if (actionType == SequenceActionType.ParallelEvents)
-                ExecuteParallelEvents(data, seq);
-            else if (actionType == SequenceActionType.WaitForEvent)
-                ExecuteWaitForEvent(data, seq);
-            else
-                ExecuteDelay(data, seq);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void ExecuteSingleEvent(SequenceData data, ActiveSequence seq)
-        {
-            CheckPostExecution(data, seq);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void ExecuteParallelEvents(SequenceData data, ActiveSequence seq)
-        {
-            CheckPostExecution(data, seq);
-        }
-
-        private void ExecuteWaitForEvent(SequenceData data, ActiveSequence seq)
-        {
-            var waitStep = data.WaitSteps[seq.CurrentStep];
-            int waitEventId = waitStep.WaitEventId;
-
-            if (waitEventId != -1)
+            switch (data.ActionTypes[seq.Step])
             {
-                seq.IsWaiting = true;
-                SubscribeToEvent(waitEventId, seq);
-                if (!_sequenceToWaitingEvents.TryGetValue(seq, out var list))
-                {
-                    list = new List<int>(4);
-                    _sequenceToWaitingEvents[seq] = list;
-                }
+                case SequenceActionType.SingleEvent:
+                    Publish(data.SingleSteps[seq.Step].EventData);
+                    Advance(seq);
+                    break;
 
-                list.Add(waitEventId);
-            }
-            else
-            {
-                AdvanceToNextStep(seq);
+                case SequenceActionType.ParallelEvents:
+                    foreach (var e in data.ParallelSteps[seq.Step].Events)
+                        Publish(e);
+                    Advance(seq);
+                    break;
+
+                case SequenceActionType.WaitForEvent:
+                    Wait(seq, data.WaitSteps[seq.Step]);
+                    break;
+
+                case SequenceActionType.Delay:
+                    seq.Delay = StartCoroutine(Delay(seq, data.Delays[seq.Step]));
+                    break;
             }
         }
 
-        private void ExecuteDelay(SequenceData data, ActiveSequence seq)
+        private void Publish(IEventData data)
         {
-            float delay = data.Delays[seq.CurrentStep];
-            if (delay > 0 && delay <= 3600f)
-            {
-                seq.IsWaiting = true;
-                seq.DelayCoroutine = StartCoroutine(DelayCoroutine(seq, delay));
-            }
-            else
-            {
-                AdvanceToNextStep(seq);
-            }
+            if (data == null || data.EventId <= 0) return;
+            // _events.Publish(data.EventId, data);
         }
 
-        private System.Collections.IEnumerator DelayCoroutine(ActiveSequence seq, float delay)
+        private void Wait(ActiveSequence seq, WaitStep step)
         {
-            yield return new WaitForSeconds(delay);
-            if (_activeSequenceSet.Contains(seq) && seq.IsWaiting)
+            seq.Waiting = true;
+
+            if (!_waiting.TryGetValue(step.WaitEventId, out var list))
             {
-                seq.IsWaiting = false;
-                seq.DelayCoroutine = null;
+                list = new List<ActiveSequence>();
+                _waiting[step.WaitEventId] = list;
 
-                var data = _sequences[seq.SequenceId];
-                var waitStep = data.WaitSteps[seq.CurrentStep];
-                if (waitStep.WaitEventId != -1)
-                    ExecuteWaitForEvent(data, seq);
-                else
-                    AdvanceToNextStep(seq);
-            }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void CheckPostExecution(SequenceData data, ActiveSequence seq)
-        {
-            var waitStep = data.WaitSteps[seq.CurrentStep];
-            if (waitStep.WaitEventId != -1)
-            {
-                ExecuteWaitForEvent(data, seq);
-                return;
-            }
-
-            float delay = data.Delays[seq.CurrentStep];
-            if (delay > 0)
-            {
-                ExecuteDelay(data, seq);
-                return;
-            }
-
-            AdvanceToNextStep(seq);
-        }
-
-        private void AdvanceToNextStep(ActiveSequence seq)
-        {
-            seq.CurrentStep++;
-            seq.IsWaiting = false;
-            if (seq.DelayCoroutine != null)
-            {
-                StopCoroutine(seq.DelayCoroutine);
-                seq.DelayCoroutine = null;
-            }
-
-            ExecuteCurrentStep(seq);
-        }
-
-        private void CompleteSequence(ActiveSequence seq)
-        {
-            CleanupSequence(seq);
-            ReturnToPool(seq);
-            _activeSequenceSet.Remove(seq);
-
-            if (_sequenceToIndex.TryGetValue(seq.SequenceId, out int index))
-            {
-                int lastIndex = _activeSequences.Count - 1;
-                if (index != lastIndex)
-                {
-                    _activeSequences[index] = _activeSequences[lastIndex];
-                    _sequenceToIndex[_activeSequences[index].SequenceId] = index;
-                }
-
-                _activeSequences.RemoveAt(lastIndex);
-                _sequenceToIndex.Remove(seq.SequenceId);
-            }
-
-            _isRunning[seq.SequenceId] = false;
-        }
-
-        private void CleanupSequence(ActiveSequence seq)
-        {
-            if (seq.DelayCoroutine != null)
-            {
-                StopCoroutine(seq.DelayCoroutine);
-                seq.DelayCoroutine = null;
-            }
-
-            if (_sequenceToWaitingEvents.TryGetValue(seq, out var waitingEvents))
-            {
-                foreach (int eventId in waitingEvents)
-                {
-                    if (_eventToWaitingSequences.TryGetValue(eventId, out var list))
-                    {
-                        list.Remove(seq);
-                        if (list.Count == 0)
-                        {
-                            _eventToWaitingSequences.Remove(eventId);
-                            UnsubscribeFromEvent(eventId);
-                        }
-                    }
-                }
-
-                _sequenceToWaitingEvents.Remove(seq);
-            }
-        }
-
-        private void SubscribeToEvent(int eventId, ActiveSequence seq)
-        {
-            if (!_eventToWaitingSequences.TryGetValue(eventId, out var list))
-            {
-                list = new List<ActiveSequence>(4);
-                _eventToWaitingSequences[eventId] = list;
-
-                Action<EventData> callback = (eventData) => OnEventPublished(eventId, eventData);
-                _eventSubscriptions[eventId] = callback;
+                Action<IEventData> cb = e => OnEvent(step.WaitEventId, e);
+                _subscriptions[step.WaitEventId] = cb;
+                //  _events.Subscribe(step.WaitEventId, cb);
             }
 
             list.Add(seq);
         }
 
-        private void OnEventPublished(int eventId, EventData eventData)
+        private void OnEvent(int id, IEventData data)
         {
-            if (_eventToWaitingSequences.TryGetValue(eventId, out var waitingSequences))
+            if (!_waiting.TryGetValue(id, out var list))
+                return;
+
+            for (int i = list.Count - 1; i >= 0; i--)
             {
-                int count = waitingSequences.Count;
-                int i = 0;
+                var seq = list[i];
+                var wait = _sequences[seq.Id].WaitSteps[seq.Step];
 
-                while (i < count)
-                {
-                    var seq = waitingSequences[i];
-                    if (!seq.IsWaiting || !_sequenceToWaitingEvents.TryGetValue(seq, out var events) ||
-                        !events.Contains(eventId))
-                    {
-                        i++;
-                        continue;
-                    }
+                if (!wait.Matches(data))
+                    continue;
 
-                    var waitStep = _sequences[seq.SequenceId].WaitSteps[seq.CurrentStep];
-                    if (!waitStep.Matches(eventData))
-                    {
-                        i++;
-                        continue;
-                    }
+                list.RemoveAt(i);
+                seq.Waiting = false;
+                Advance(seq);
+            }
 
-                    RemoveSequenceFromWaiting(seq, eventId);
-                    seq.IsWaiting = false;
-
-                    var delay = _sequences[seq.SequenceId].Delays[seq.CurrentStep];
-                    if (delay > 0)
-                        ExecuteDelay(_sequences[seq.SequenceId], seq);
-                    else
-                        AdvanceToNextStep(seq);
-
-                    waitingSequences[i] = waitingSequences[count - 1];
-                    waitingSequences.RemoveAt(count - 1);
-                    count--;
-                }
-
-                if (waitingSequences.Count == 0)
-                {
-                    _eventToWaitingSequences.Remove(eventId);
-                    UnsubscribeFromEvent(eventId);
-                }
+            if (list.Count == 0)
+            {
+                _waiting.Remove(id);
+                // _events.Unsubscribe(id, _subscriptions[id]);
+                _subscriptions.Remove(id);
             }
         }
 
-        private void RemoveSequenceFromWaiting(ActiveSequence seq, int eventId)
+        private System.Collections.IEnumerator Delay(ActiveSequence seq, float seconds)
         {
-            if (_sequenceToWaitingEvents.TryGetValue(seq, out var events))
-            {
-                events.Remove(eventId);
-                if (events.Count == 0)
-                    _sequenceToWaitingEvents.Remove(seq);
-            }
+            yield return new WaitForSeconds(seconds);
+            Advance(seq);
         }
 
-        private void UnsubscribeFromEvent(int eventId)
+        private void Advance(ActiveSequence seq)
         {
-            _eventSubscriptions.Remove(eventId);
+            seq.Step++;
+            Execute(seq);
         }
 
-        private void UnsubscribeFromAllEvents()
+        private void Complete(ActiveSequence seq)
         {
-            _eventSubscriptions.Clear();
+            _isRunning[seq.Id] = false;
+            _active.Remove(seq);
+            Return(seq);
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private ActiveSequence GetOrCreateActiveSequence()
+        private ActiveSequence Get()
+            => _pool.Count > 0 ? _pool.Dequeue() : new ActiveSequence();
+
+        private void Return(ActiveSequence seq)
         {
-            if (_pool.Count > 0)
-            {
-                var seq = _pool.Dequeue();
-                seq.SequenceId = -1;
-                seq.CurrentStep = 0;
-                seq.IsWaiting = false;
-                seq.DelayCoroutine = null;
-                return seq;
-            }
+            if (seq.Delay != null)
+                StopCoroutine(seq.Delay);
 
-            return new ActiveSequence();
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void ReturnToPool(ActiveSequence seq)
-        {
-            seq.SequenceId = -1;
-            seq.CurrentStep = 0;
-            seq.IsWaiting = false;
-            if (seq.DelayCoroutine != null)
-            {
-                StopCoroutine(seq.DelayCoroutine);
-                seq.DelayCoroutine = null;
-            }
-
+            seq.Delay = null;
             _pool.Enqueue(seq);
         }
 
-        private void EnsureCapacity(int requiredIndex)
+        private void EnsureCapacity(int id)
         {
-            if (requiredIndex < _sequences.Length)
-                return;
-
-            int newSize = Mathf.NextPowerOfTwo(requiredIndex + 1);
-            Array.Resize(ref _sequences, newSize);
-            Array.Resize(ref _isRunning, newSize);
+            if (id < _sequences.Length) return;
+            int size = Mathf.NextPowerOfTwo(id + 1);
+            Array.Resize(ref _sequences, size);
+            Array.Resize(ref _isRunning, size);
         }
     }
 }
