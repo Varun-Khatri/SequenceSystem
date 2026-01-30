@@ -13,18 +13,13 @@ namespace VK.SequenceSystem.Core
         public EventData(int eventId, object data = null)
         {
             EventId = eventId;
-            Data = data;     Debug.Log($"[EventData] Created: EventId={eventId}, Data={(data != null ? data.ToString() : "null")}");
-
+            Data = data;
         }
 
-        public T GetData<T>()
-        {
-            return Data != null ? (T)Data : default;
-        }
+        public T GetData<T>() => Data != null ? (T)Data : default;
 
         public bool HasData => Data != null;
     }
-
 
     public struct SequenceStep
     {
@@ -38,23 +33,15 @@ namespace VK.SequenceSystem.Core
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static SequenceStep Create(int eventId, object data = null, int waitForId = -1, float delay = 0f)
-        {
-            Debug.Log(
-                $"[SequenceStep] Creating: eventId={eventId}, data={(data != null ? data.ToString() : "null")}, waitForId={waitForId}, delay={delay}");
-
-
-            return new SequenceStep
-            {
-                EventData = new EventData(eventId, data), WaitForEventId = waitForId, DelaySeconds = delay
-            };
-        }
+            => new SequenceStep
+                { EventData = new EventData(eventId, data), WaitForEventId = waitForId, DelaySeconds = delay };
     }
 
     public struct WaitStep
     {
         public int WaitEventId;
         public object ExpectedData;
-        public bool HasFilter; // true if ExpectedData should be checked
+        public bool HasFilter;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static WaitStep Create(int waitEventId, object expectedData = null)
@@ -67,34 +54,7 @@ namespace VK.SequenceSystem.Core
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool Matches(EventData eventData)
-        {
-            return !HasFilter || object.Equals(eventData.Data, ExpectedData);
-        }
-    }
-
-    public struct SequenceData
-    {
-        public int SequenceId;
-        public SequenceActionType[] ActionTypes;
-        public SequenceStep[] SingleSteps;
-        public ParallelStep[] ParallelSteps;
-        public WaitStep[] WaitSteps;
-        public float[] Delays;
-
-        public bool IsValid => ActionTypes != null;
-
-        // OPTIMIZATION: Validate on creation
-        public void Validate()
-        {
-            if (ActionTypes == null) return;
-
-            int length = ActionTypes.Length;
-            if (SingleSteps.Length != length || ParallelSteps.Length != length ||
-                Delays.Length != length || WaitSteps.Length != length)
-            {
-                throw new ArgumentException("All sequence arrays must have same length");
-            }
-        }
+            => !HasFilter || object.Equals(eventData.Data, ExpectedData);
     }
 
     public struct ParallelStep
@@ -113,11 +73,33 @@ namespace VK.SequenceSystem.Core
 
             var events = new EventData[eventIds.Length];
             for (int i = 0; i < eventIds.Length; i++)
-            {
                 events[i] = new EventData(eventIds[i]);
-            }
 
             return new ParallelStep { EventDataArray = events };
+        }
+    }
+
+    public struct SequenceData
+    {
+        public int SequenceId;
+        public SequenceActionType[] ActionTypes;
+        public SequenceStep[] SingleSteps;
+        public ParallelStep[] ParallelSteps;
+        public WaitStep[] WaitSteps;
+        public float[] Delays;
+
+        public bool IsValid => ActionTypes != null;
+
+        public void Validate()
+        {
+            if (ActionTypes == null) return;
+
+            int length = ActionTypes.Length;
+            if (SingleSteps.Length != length || ParallelSteps.Length != length ||
+                Delays.Length != length || WaitSteps.Length != length)
+            {
+                throw new ArgumentException("All sequence arrays must have same length");
+            }
         }
     }
 

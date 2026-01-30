@@ -20,18 +20,11 @@ namespace VK.SequenceSystem.Core
 
         private int _stepCount = 0;
 
-        // ========================
-        // Fluent API Methods
-        // ========================
-
         public SequenceBuilder ThenEvent<T>(int eventId, T data = default, int waitForId = -1, float delay = 0f)
         {
-            Debug.Log(
-                $"[Builder] Adding ThenEvent: eventId={eventId}, data={(data != null ? data.ToString() : "null")}, waitForId={waitForId}, delay={delay}");
-
             _actions.Add(SequenceActionType.SingleEvent);
             _singleSteps.Add(SequenceStep.Create(eventId, data, waitForId, delay));
-            _parallelSteps.Add(default);
+            _parallelSteps.Add(default); // placeholder
             _waitSteps.Add(WaitStep.Create(waitForId >= 0 ? waitForId : -1));
             _delays.Add(delay);
             _stepCount++;
@@ -39,24 +32,15 @@ namespace VK.SequenceSystem.Core
         }
 
         public SequenceBuilder ThenEvent(int eventId, int waitForId = -1, float delay = 0f)
-        {
-            return ThenEvent<object>(eventId, null, waitForId, delay);
-        }
+            => ThenEvent<object>(eventId, null, waitForId, delay);
 
         public SequenceBuilder ThenParallel(params int[] eventIds)
-        {
-            return ThenParallel(eventIds, waitForId: -1, delay: 0f);
-        }
-
-        public SequenceBuilder ThenParallel(params EventData[] eventData)
-        {
-            return ThenParallel(eventData, waitForId: -1, delay: 0f);
-        }
+            => ThenParallel(eventIds, -1, 0f);
 
         public SequenceBuilder ThenParallel(int[] eventIds, int waitForId = -1, float delay = 0f)
         {
             _actions.Add(SequenceActionType.ParallelEvents);
-            _singleSteps.Add(default);
+            _singleSteps.Add(SequenceStep.Create(-1)); // safe no-op
             _parallelSteps.Add(ParallelStep.Create(eventIds));
             _waitSteps.Add(WaitStep.Create(waitForId >= 0 ? waitForId : -1));
             _delays.Add(delay);
@@ -67,7 +51,7 @@ namespace VK.SequenceSystem.Core
         public SequenceBuilder ThenParallel(EventData[] eventData, int waitForId = -1, float delay = 0f)
         {
             _actions.Add(SequenceActionType.ParallelEvents);
-            _singleSteps.Add(default);
+            _singleSteps.Add(SequenceStep.Create(-1));
             _parallelSteps.Add(ParallelStep.Create(eventData));
             _waitSteps.Add(WaitStep.Create(waitForId >= 0 ? waitForId : -1));
             _delays.Add(delay);
@@ -78,14 +62,12 @@ namespace VK.SequenceSystem.Core
         public SequenceBuilder ThenWait<T>(int eventId, T expectedData = default, float delay = 0f)
         {
             _actions.Add(SequenceActionType.WaitForEvent);
-            _singleSteps.Add(default);
+            _singleSteps.Add(SequenceStep.Create(-1));
             _parallelSteps.Add(default);
 
             Func<EventData, bool> filter = null;
             if (expectedData != null)
-            {
-                filter = (eventData) => object.Equals(eventData.Data, expectedData);
-            }
+                filter = e => object.Equals(e.Data, expectedData);
 
             _waitSteps.Add(WaitStep.Create(eventId, filter));
             _delays.Add(delay);
@@ -96,24 +78,17 @@ namespace VK.SequenceSystem.Core
         public SequenceBuilder ThenDelay(float seconds)
         {
             _actions.Add(SequenceActionType.Delay);
-            _singleSteps.Add(default);
+            _singleSteps.Add(SequenceStep.Create(-1));
             _parallelSteps.Add(default);
-            _waitSteps.Add(WaitStep.Create(-1)); // Always safe
+            _waitSteps.Add(WaitStep.Create(-1));
             _delays.Add(seconds);
             _stepCount++;
             return this;
         }
 
-        // ========================
-        // Build & Utility Methods
-        // ========================
-
-        public int StepCount => _stepCount;
-
         public SequenceData Build(int sequenceId)
         {
             if (_stepCount == 0)
-            {
                 return new SequenceData
                 {
                     SequenceId = sequenceId,
@@ -123,9 +98,7 @@ namespace VK.SequenceSystem.Core
                     WaitSteps = Array.Empty<WaitStep>(),
                     Delays = Array.Empty<float>()
                 };
-            }
 
-            // Rent arrays from ArrayPool to minimize allocations
             var actionsArray = ArrayPool<SequenceActionType>.Shared.Rent(_stepCount);
             var singleArray = ArrayPool<SequenceStep>.Shared.Rent(_stepCount);
             var parallelArray = ArrayPool<ParallelStep>.Shared.Rent(_stepCount);
@@ -137,26 +110,11 @@ namespace VK.SequenceSystem.Core
             _parallelSteps.CopyTo(parallelArray, 0);
             _delays.CopyTo(delaysArray, 0);
 
-            // Fill waitArray with valid WaitStep for every step
+            // Ensure every step has valid WaitStep (prevents EventId=0 execution)
             for (int i = 0; i < _stepCount; i++)
-            {
-                if (i < _waitSteps.Count && _actions[i] == SequenceActionType.WaitForEvent)
-                {
-                    waitArray[i] = _waitSteps[i];
-                }
-                else if (i < _waitSteps.Count)
-                {
-                    // Use existing WaitStep if defined
-                    waitArray[i] = _waitSteps[i];
-                }
-                else
-                {
-                    // Default no-wait
-                    waitArray[i] = WaitStep.Create(-1);
-                }
-            }
+                waitArray[i] = i < _waitSteps.Count ? _waitSteps[i] : WaitStep.Create(-1);
 
-            var data = new SequenceData
+            return new SequenceData
             {
                 SequenceId = sequenceId,
                 ActionTypes = actionsArray,
@@ -165,9 +123,6 @@ namespace VK.SequenceSystem.Core
                 WaitSteps = waitArray,
                 Delays = delaysArray
             };
-
-            data.Validate();
-            return data;
         }
 
         public void Clear()
